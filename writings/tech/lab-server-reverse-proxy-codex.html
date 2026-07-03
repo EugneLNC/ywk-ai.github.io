@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>让内网实验室服务器通过本机代理访问外网 - Wenkai Yang 的博客</title>
+  <meta name="description" content="用 SSH 反向端口转发，把本机 Clash Verge/mihomo 代理借给只能在校园网访问的实验室服务器。">
+  <link rel="stylesheet" href="/styles/site.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">Wenkai Yang</a>
+    <nav class="site-nav" aria-label="主导航">
+      <a href="/toc.html">目录</a>
+      <a href="/about.html">关于</a>
+      <a href="https://github.com/ywk-ai" rel="me">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page article">
+    <p class="crumb"><a href="/toc.html">目录</a> / 技术</p>
+    <article>
+      <h1>让内网实验室服务器通过本机代理访问外网</h1>
+      <p class="meta">2026 年 7 月 3 日 · SSH · 反向端口转发 · Codex</p>
+
+      <p>前几天有人问我：实验室服务器不能直接连外网，那还能不能在上面用 Codex？我第一反应是，能，因为我以前折腾过。但尴尬的是，我只记得“好像从本机借了个代理过去”，具体命令已经忘得差不多了。</p>
+
+      <p>于是我翻了一下自己电脑的配置和命令历史。答案比我想象得朴素：不是 frp，也不是 VPN，而是 SSH 自带的反向端口转发。</p>
+
+      <p>我的本机开着 Clash Verge/mihomo，代理端口是 <code>127.0.0.1:7890</code>。登录实验室服务器时，我让服务器上的一个本地端口转回这台电脑的代理端口。这样服务器虽然自己不出网，但它访问 <code>127.0.0.1:17890</code> 时，请求会沿着 SSH 连接回到我的电脑，再由我的电脑代理出去。</p>
+
+      <h2>最短可用版本</h2>
+      <p>在自己的电脑上执行：</p>
+
+      <pre><code>ssh -R 17890:127.0.0.1:7890 your_user@your_lab_server</code></pre>
+
+      <p>这条 SSH 不要关。进到服务器后，先临时设置代理：</p>
+
+      <pre><code>export HTTP_PROXY=http://127.0.0.1:17890
+export HTTPS_PROXY=http://127.0.0.1:17890
+export ALL_PROXY=http://127.0.0.1:17890
+export NO_PROXY=localhost,127.0.0.1,::1</code></pre>
+
+      <p>然后测试一下：</p>
+
+      <pre><code>curl -I https://api.openai.com
+curl -I https://registry.npmjs.org/</code></pre>
+
+      <p>能拿到 HTTP 响应头，就说明这条路通了。接下来再装 Codex 或跑需要联网的命令：</p>
+
+      <pre><code>npm install -g @openai/codex@latest
+codex login
+codex</code></pre>
+
+      <h2>这到底绕了哪条路</h2>
+      <p><code>-R</code> 的格式可以这样记：</p>
+
+      <pre><code>ssh -R 服务器端口:本机地址:本机端口 用户名@服务器地址</code></pre>
+
+      <p>所以这条命令：</p>
+
+      <pre><code>ssh -R 17890:127.0.0.1:7890 your_user@your_lab_server</code></pre>
+
+      <p>意思是：让服务器监听它自己的 <code>17890</code> 端口，所有打到这个端口的连接，都转到我电脑上的 <code>127.0.0.1:7890</code>。服务器不用知道我的电脑在校园网外怎么访问外网，它只要能维持这条 SSH 连接就行。</p>
+
+      <p>画成图，大概是这样：</p>
+
+      <pre><code>实验室服务器
+  curl / npm / codex
+        |
+        v
+  127.0.0.1:17890
+        |
+        | SSH 反向端口转发
+        v
+你的电脑 127.0.0.1:7890
+        |
+        v
+Clash Verge / mihomo
+        |
+        v
+外网</code></pre>
+
+      <h2>我是怎么确认的</h2>
+      <p>这次不是凭记忆写的。我在本机看到了这些痕迹：</p>
+
+      <ul>
+        <li>Windows 系统代理开着，地址是 <code>127.0.0.1:7890</code>。</li>
+        <li><code>HTTP_PROXY</code>、<code>HTTPS_PROXY</code>、<code>ALL_PROXY</code> 也都指向 <code>http://127.0.0.1:7890</code>。</li>
+        <li>监听 <code>7890</code> 的进程是 Clash Verge 的 <code>verge-mihomo.exe</code>。</li>
+        <li>SSH 配置里出现过 <code>RemoteForward ... localhost:7890</code>，PowerShell 历史里也有 <code>ssh -R 17890:127.0.0.1:7890 ...</code>。</li>
+      </ul>
+
+      <p>所以我基本可以确定，当时就是用这个办法让服务器借本机代理出网的。这里把真实用户名和内网地址都换成了占位符，公开网页里不要直接贴实验室机器信息。</p>
+
+      <h2>写进 SSH config</h2>
+      <p>如果总要连同一台服务器，可以把转发写进本机的 <code>~/.ssh/config</code>：</p>
+
+      <pre><code>Host lab-server-proxy
+  HostName your_lab_server_ip_or_hostname
+  User your_user
+  Port 22
+  RemoteForward 17890 127.0.0.1:7890
+  ServerAliveInterval 30
+  ServerAliveCountMax 3</code></pre>
+
+      <p>以后只要：</p>
+
+      <pre><code>ssh lab-server-proxy</code></pre>
+
+      <p>进服务器后再设置代理环境变量。想省事的话，可以把前面的 <code>export</code> 放进服务器的 <code>~/.bashrc</code> 或 <code>~/.zshrc</code>，不过我建议先手动试通几次。网络问题最烦的地方就是：你以为配置已经生效了，实际 shell 根本没读到。</p>
+
+      <h2>给 Codex 用</h2>
+      <p>Codex 本身没有什么特殊之处。它需要访问 OpenAI 相关服务，安装时 npm 也要访问 registry，所以重点还是让当前 shell 里的代理变量生效。</p>
+
+      <pre><code>export HTTP_PROXY=http://127.0.0.1:17890
+export HTTPS_PROXY=http://127.0.0.1:17890
+export ALL_PROXY=http://127.0.0.1:17890
+export NO_PROXY=localhost,127.0.0.1,::1</code></pre>
+
+      <p>然后：</p>
+
+      <pre><code>npm install -g @openai/codex@latest
+codex --version
+codex login</code></pre>
+
+      <p>登录时尽量让每个人用自己的账号。服务器没有图形浏览器也没关系，通常可以把终端里给出的登录链接复制到自己电脑的浏览器里完成授权。不要随便把自己的 <code>~/.codex/auth.json</code> 发给别人；如果确实要临时迁移认证文件，至少确认文件权限是 <code>600</code>，而且只给可信账号用。</p>
+
+      <h2>容易踩的坑</h2>
+
+      <h3>为什么我用 17890，不直接用 7890？</h3>
+      <p>直接用 <code>7890</code> 也行。但服务器是多人环境的话，这个端口很容易撞车。用 <code>17890</code> 这种不太常见的端口，少一点玄学报错。</p>
+
+      <h3>SSH 断了之后代理还在吗？</h3>
+      <p>不在。这个代理入口靠当前 SSH 连接撑着。最简单的办法是开一个专门的终端放着别关；再讲究一点可以用 <code>tmux</code> 或 <code>autossh</code> 保活。</p>
+
+      <h3>curl 报 connection refused 怎么看？</h3>
+      <p>先在服务器上看端口有没有起来：</p>
+
+      <pre><code>ss -ltnp | grep 17890</code></pre>
+
+      <p>如果没有监听，说明反向转发没建起来。回到自己的电脑，重新执行 <code>ssh -R 17890:127.0.0.1:7890 ...</code>，同时确认 Clash Verge/mihomo 还在运行。</p>
+
+      <h3>npm 还是不走代理怎么办？</h3>
+      <p>有些时候我会直接给 npm 写一份配置：</p>
+
+      <pre><code>npm config set proxy http://127.0.0.1:17890
+npm config set https-proxy http://127.0.0.1:17890</code></pre>
+
+      <p>用完想恢复：</p>
+
+      <pre><code>npm config delete proxy
+npm config delete https-proxy</code></pre>
+
+      <h2>最后提醒一句</h2>
+      <p>这套方法默认只让服务器自己访问 <code>127.0.0.1:17890</code>。不要随手改成对整个内网开放，也不要把本机代理端口、Codex 登录文件、真实服务器地址写到公开文档里。</p>
+
+      <p>它解决的是一个很具体的问题：我已经能 SSH 到服务器，但服务器不能出网。只要本机能出网，本机又能 SSH 到服务器，就可以用反向端口转发把代理借过去。土办法，但好用。</p>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <span>© 2026 Wenkai Yang</span>
+    <a href="/toc.html">文档索引</a>
+  </footer>
+</body>
+</html>
