@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>让内网实验室服务器通过本机代理访问外网 - Wenkai Yang 的博客</title>
-  <meta name="description" content="用 SSH 反向端口转发，把本机 Clash Verge/mihomo 代理借给只能在校园网访问的实验室服务器。">
+  <title>把本机代理稳定地借给内网实验室服务器 - Wenkai Yang 的博客</title>
+  <meta name="description" content="用 SSH 反向端口转发、Windows 计划任务和统一代理配置，让不能直接出网的实验室服务器稳定使用 Codex、npm 和 VS Code 扩展。">
   <link rel="stylesheet" href="../../styles/site.css">
 </head>
 <body>
@@ -20,138 +20,165 @@
   <main class="page article">
     <p class="crumb"><a href="../../toc.html">目录</a> / 技术</p>
     <article>
-      <h1>让内网实验室服务器通过本机代理访问外网</h1>
-      <p class="meta">2026 年 7 月 3 日 · SSH · 反向端口转发 · Codex</p>
+      <h1>把本机代理稳定地借给内网实验室服务器</h1>
+      <p class="meta">2026 年 7 月 3 日 · 更新于 2026 年 7 月 10 日 · SSH · 反向端口转发 · Codex</p>
 
-      <p>实验室服务器不能直接连外网：能，通过SSH 自带的反向端口转发就可以</p>
+      <p>实验室服务器只能在校园网里访问，也没有直接出网的路。可我又希望它能装依赖、更新 VS Code 扩展，以及运行 Codex。最后用的办法并不复杂：让服务器把请求沿着 SSH 连接送回我的电脑，再由电脑上的 Clash/mihomo 代理转出去。</p>
 
-      <p>我的本机开着 Clash Verge/mihomo，代理端口是 <code>127.0.0.1:7890</code>。登录实验室服务器时，我让服务器上的一个本地端口转回这台电脑的代理端口。这样服务器虽然自己不出网，但它访问 <code>127.0.0.1:17890</code> 时，请求会沿着 SSH 连接回到我的电脑，再由我的电脑代理出去。</p>
+      <p>这篇记录的是最终能长期用的版本。最开始我只是临时开一条转发，关掉终端就断；后来又遇到 VS Code 还在访问旧端口、npm 看似卡死、已有隧道残留在服务器上等问题。把端口职责分开、让本机定时补齐隧道以后，事情才安静下来。</p>
 
-      <h2>最短可用版本</h2>
-      <p>在自己的电脑上执行：</p>
-
-      <pre><code>ssh -R 17890:127.0.0.1:7890 your_user@your_lab_server</code></pre>
-
-      <p>这条 SSH 不要关。进到服务器后，先临时设置代理：</p>
-
-      <pre><code>export HTTP_PROXY=http://127.0.0.1:17890
-export HTTPS_PROXY=http://127.0.0.1:17890
-export ALL_PROXY=http://127.0.0.1:17890
-export NO_PROXY=localhost,127.0.0.1,::1</code></pre>
-
-      <p>然后测试一下：</p>
-
-      <pre><code>curl -I https://api.openai.com
-curl -I https://registry.npmjs.org/</code></pre>
-
-      <p>能拿到 HTTP 响应头，就说明这条路通了。接下来再装 Codex 或跑需要联网的命令：</p>
-
-      <pre><code>npm install -g @openai/codex@latest
-codex login
-codex</code></pre>
-
-      <h2>这到底绕了哪条路</h2>
-      <p><code>-R</code> 的格式可以这样记：</p>
-
-      <pre><code>ssh -R 服务器端口:本机地址:本机端口 用户名@服务器地址</code></pre>
-
-      <p>所以这条命令：</p>
-
-      <pre><code>ssh -R 17890:127.0.0.1:7890 your_user@your_lab_server</code></pre>
-
-      <p>意思是：让服务器监听它自己的 <code>17890</code> 端口，所有打到这个端口的连接，都转到我电脑上的 <code>127.0.0.1:7890</code>。服务器不用知道我的电脑在校园网外怎么访问外网，它只要能维持这条 SSH 连接就行。</p>
-
-      <p>画成图，大概是这样：</p>
+      <h2>最后的结构</h2>
 
       <pre><code>实验室服务器
-  curl / npm / codex
-        |
-        v
-  127.0.0.1:17890
-        |
-        | SSH 反向端口转发
-        v
-你的电脑 127.0.0.1:7890
-        |
-        v
-Clash Verge / mihomo
-        |
-        v
-外网</code></pre>
+  Codex / npm / VS Code Server
+              |
+              | HTTP(S) 代理: 127.0.0.1:38081
+              v
+     SSH 反向端口转发 (-R)
+              |
+              v
+Windows 本机 [::1]:7890
+       Clash Verge / mihomo
+              |
+              v
+             外网</code></pre>
 
-      <h2>本机痕迹</h2>
-
+      <p>这里故意用了两个不同端口：</p>
       <ul>
-        <li>Windows 系统代理开着，地址是 <code>127.0.0.1:7890</code>。</li>
-        <li><code>HTTP_PROXY</code>、<code>HTTPS_PROXY</code>、<code>ALL_PROXY</code> 也都指向 <code>http://127.0.0.1:7890</code>。</li>
-        <li>监听 <code>7890</code> 的进程是 Clash Verge 的 <code>verge-mihomo.exe</code>。</li>
-        <li>SSH 配置里出现过 <code>RemoteForward ... localhost:7890</code>，PowerShell 历史里也有 <code>ssh -R 17890:127.0.0.1:7890 ...</code>。</li>
+        <li>本机 <code>7890</code>：Clash/mihomo 的代理端口。这个端口只留给本机代理程序。</li>
+        <li>服务器 <code>38081</code>：SSH 反向转发在服务器上创建的入口。服务器上的程序只访问它。</li>
       </ul>
 
+      <p>不要在服务器上直接写 <code>127.0.0.1:7890</code>。对服务器来说，这指向它自己，而不是我的 Windows 电脑。过去出现的 <code>ECONNREFUSED 127.0.0.1:7890</code>，就是这个问题。</p>
 
-      <h2>写进 SSH config</h2>
-      <p>如果总要连同一台服务器，可以把转发写进本机的 <code>~/.ssh/config</code>：</p>
+      <h2>先把最短路径跑通</h2>
 
-      <pre><code>Host lab-server-proxy
-  HostName your_lab_server_ip_or_hostname
-  User your_user
-  Port 22
-  RemoteForward 17890 127.0.0.1:7890
-  ServerAliveInterval 30
-  ServerAliveCountMax 3</code></pre>
+      <p>假设本机 Clash 的 HTTP 代理监听在 <code>[::1]:7890</code>。在本机执行：</p>
 
-      <p>以后只要：</p>
+      <pre><code>ssh -N -T \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -R 38081:[::1]:7890 \
+  lab-server</code></pre>
 
-      <pre><code>ssh lab-server-proxy</code></pre>
+      <p><code>lab-server</code> 是写在本机 <code>~/.ssh/config</code> 里的别名。真实服务器地址、用户名和跳板方式都不应该出现在公开文章里。</p>
 
-      <p>进服务器后再设置代理环境变量。想省事的话，可以把前面的 <code>export</code> 放进服务器的 <code>~/.bashrc</code> 或 <code>~/.zshrc</code>，不过我建议先手动试通几次。网络问题最烦的地方就是：你以为配置已经生效了，实际 shell 根本没读到。</p>
+      <p>连上服务器后，先确认入口真的存在：</p>
 
-      <h2>给 Codex 用</h2>
-      <p>Codex 本身没有什么特殊之处。它需要访问 OpenAI 相关服务，安装时 npm 也要访问 registry，所以重点还是让当前 shell 里的代理变量生效。</p>
+      <pre><code>ss -ltn | grep 38081
+curl -v -x http://127.0.0.1:38081 -I https://api.openai.com --max-time 20</code></pre>
 
-      <pre><code>export HTTP_PROXY=http://127.0.0.1:17890
-export HTTPS_PROXY=http://127.0.0.1:17890
-export ALL_PROXY=http://127.0.0.1:17890
-export NO_PROXY=localhost,127.0.0.1,::1</code></pre>
+      <p>看到 <code>HTTP/1.1 200 Connection established</code>，就说明代理隧道已经连通。对 <code>api.openai.com</code> 做 <code>HEAD</code> 请求时，后面出现 <code>421</code> 也不代表隧道坏了；前面的 CONNECT 成功和 TLS 握手成功才是这里要看的东西。</p>
 
-      <p>然后：</p>
+      <h2>让服务器的命令都走 38081</h2>
 
-      <pre><code>npm install -g @openai/codex@latest
-codex --version
-codex login</code></pre>
+      <p>我把下面内容放在服务器的 <code>~/use-codex-proxy.sh</code>。这样不需要每次手敲一长串变量。</p>
 
-      <p>登录时尽量让每个人用自己的账号。服务器没有图形浏览器也没关系，通常可以把终端里给出的登录链接复制到自己电脑的浏览器里完成授权。不要随便把自己的 <code>~/.codex/auth.json</code> 发给别人；如果确实要临时迁移认证文件，至少确认文件权限是 <code>600</code>，而且只给可信账号用。</p>
+      <pre><code>export HTTP_PROXY=http://127.0.0.1:38081
+export HTTPS_PROXY=http://127.0.0.1:38081
+export ALL_PROXY=http://127.0.0.1:38081
+export http_proxy=$HTTP_PROXY
+export https_proxy=$HTTPS_PROXY
+export all_proxy=$ALL_PROXY
+export NO_PROXY=localhost,127.0.0.1,::1
+export no_proxy=$NO_PROXY</code></pre>
 
-      <h2>容易踩的坑</h2>
+      <p>可以在 <code>~/.bashrc</code> 里加一个小判断：只有 <code>38081</code> 正在监听时才加载这些变量。这样隧道没起来时，终端不会假装自己能出网。</p>
 
-      <h3>为什么我用 17890，不直接用 7890？</h3>
-      <p>直接用 <code>7890</code> 也行。但服务器是多人环境的话，这个端口很容易撞车。用 <code>17890</code> 这种不太常见的端口，少一点玄学报错。</p>
+      <pre><code>if ss -ltn 2&gt;/dev/null | grep -Eq '127\.0\.0\.1:38081|\[::1\]:38081'; then
+  source "$HOME/use-codex-proxy.sh"
+fi</code></pre>
 
-      <h3>SSH 断了之后代理还在吗？</h3>
-      <p>不在。这个代理入口靠当前 SSH 连接撑着。最简单的办法是开一个专门的终端放着别关；再讲究一点可以用 <code>tmux</code> 或 <code>autossh</code> 保活。</p>
+      <p>Codex 我另外包了一层命令，固定使用自己的 npm 全局安装目录和这份代理配置：</p>
 
-      <h3>curl 报 connection refused 怎么看？</h3>
-      <p>先在服务器上看端口有没有起来：</p>
+      <pre><code>#!/usr/bin/env bash
+set -e
+export PATH="$HOME/.npm-global/bin:$PATH"
+source "$HOME/use-codex-proxy.sh"
+exec "$HOME/.npm-global/bin/codex" "$@"</code></pre>
 
-      <pre><code>ss -ltnp | grep 17890</code></pre>
+      <p>把它保存为 <code>~/.local/bin/codex-server</code> 并赋予执行权限后，日常直接运行：</p>
 
-      <p>如果没有监听，说明反向转发没建起来。回到自己的电脑，重新执行 <code>ssh -R 17890:127.0.0.1:7890 ...</code>，同时确认 Clash Verge/mihomo 还在运行。</p>
+      <pre><code>codex-server
+codex-server --version</code></pre>
 
-      <h3>npm 还是不走代理怎么办？</h3>
-      <p>有些时候我会直接给 npm 写一份配置：</p>
+      <p>这样也避开了服务器上可能同时存在多个 <code>codex</code> 的情况。更新后，正在运行的旧会话不会自动变成新版本，退出后再重新启动一次即可。</p>
 
-      <pre><code>npm config set proxy http://127.0.0.1:17890
-npm config set https-proxy http://127.0.0.1:17890</code></pre>
+      <h2>本机不打开终端，也能让隧道活着</h2>
 
-      <p>用完想恢复：</p>
+      <p>手动运行 SSH 的问题很朴素：终端一关，服务器的代理入口就没了。我的做法是让 Windows 计划任务每分钟执行一次检查脚本：本机代理存在、而对应的 <code>ssh -R</code> 进程不存在时，才在后台启动一条新的连接。</p>
 
-      <pre><code>npm config delete proxy
-npm config delete https-proxy</code></pre>
+      <p>检查脚本里真正重要的是这组参数：</p>
 
-      <h2>最后提醒一句</h2>
-      <p>这套方法默认只让服务器自己访问 <code>127.0.0.1:17890</code>。不要随手改成对整个内网开放，也不要把本机代理端口、Codex 登录文件、真实服务器地址写到公开文档里。</p>
+      <pre><code>ssh -N -T \
+  -o BatchMode=yes \
+  -o ConnectTimeout=8 \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -R 38081:[::1]:7890 \
+  lab-server</code></pre>
 
-      <p>它解决的是一个很具体的问题：我已经能 SSH 到服务器，但服务器不能出网。只要本机能出网，本机又能 SSH 到服务器，就可以用反向端口转发把代理借过去。土办法，但好用。</p>
+      <p><code>ExitOnForwardFailure=yes</code> 很重要。它能让脚本在端口已被占用或转发没有建成功时立即失败，而不是留下一条看似还活着、实际上已经不能用的 SSH 连接。</p>
+
+      <p>计划任务用隐藏方式启动 PowerShell 或 VBS 启动器即可。这样不需要常驻终端窗口，也不会隔一会儿弹出一个黑框。脚本只负责补齐缺失的隧道，不去碰 VS Code 自己建立的 SSH 连接。</p>
+
+      <h2>VS Code 和 npm 也要改掉旧代理</h2>
+
+      <p>这次最绕的一点在这里：终端里的 Codex 能连上，并不表示 VS Code Server 也会连上。VS Code Server 有自己的设置；npm 也可能在 <code>~/.npmrc</code> 里保留旧地址。它们还指向 <code>7890</code> 时，会反复报错并拖慢扩展或 CLI 更新。</p>
+
+      <p>服务器上的 VS Code 设置文件通常在：</p>
+
+      <pre><code>~/.vscode-server/data/Machine/settings.json</code></pre>
+
+      <p>把里面的代理改成服务器端口：</p>
+
+      <pre><code>{
+  "http.proxy": "http://127.0.0.1:38081"
+}</code></pre>
+
+      <p>npm 同样要检查：</p>
+
+      <pre><code>npm config set proxy http://127.0.0.1:38081
+npm config set https-proxy http://127.0.0.1:38081
+npm config get proxy
+npm config get https-proxy</code></pre>
+
+      <p>改完后断开并重新连接 VS Code Remote，让已经启动的远程服务重新读取设置。日志里再出现 <code>connect ECONNREFUSED 127.0.0.1:7890</code>，就继续搜索这两个配置文件，不要去抢占本机的 <code>7890</code>。</p>
+
+      <h2>如何判断问题在哪一层</h2>
+
+      <h3>服务器上 38081 没有监听</h3>
+      <pre><code>ss -ltn | grep 38081</code></pre>
+      <p>没有输出时，先检查本机的 Clash 是否在运行，再检查后台 SSH 进程或计划任务日志。此时改服务器代理变量没有用，因为入口根本不存在。</p>
+
+      <h3>能连到 38081，但 CONNECT 一直不返回</h3>
+      <p>这种情况常见于一个残留的旧隧道还占着端口。不要急着杀掉所有 <code>sshd</code> 进程，尤其是在 VS Code 正连着服务器的时候。换一个新的服务器端口，例如 <code>38081</code>，并把服务器配置统一改过去，通常比误断正在工作的远程会话稳妥。</p>
+
+      <h3>npm 看起来没有任何进度</h3>
+      <p>npm 下载原生二进制包时可能安静很久。先看日志和版本，而不是立刻反复 Ctrl+C：</p>
+
+      <pre><code>ls -t ~/.npm/_logs/*-debug-0.log | head -n 1
+npm ls -g @openai/codex --depth=0
+codex-server --version</code></pre>
+
+      <p>我这次更新时，大文件下载用了两分多钟，最后 npm 仍然是正常退出。安装成功后，新开的 Codex 会话才会用到新版本。</p>
+
+      <h2>收尾：一份小检查表</h2>
+
+      <pre><code># 本机：先确认 Clash 还在监听
+curl.exe -x http://127.0.0.1:7890 -I https://api.openai.com --max-time 15
+
+# 服务器：确认反向入口和外网代理
+ss -ltn | grep 38081
+curl -I -x http://127.0.0.1:38081 https://registry.npmjs.org/ --max-time 20
+
+# 服务器：确认 Codex 与 npm
+codex-server --version
+npm config get proxy</code></pre>
+
+      <p>这套方案的边界也很清楚：只让服务器访问自己的 <code>127.0.0.1:38081</code>，不把代理开放到内网；不在公开文档写真实服务器地址、账号、认证文件或本机代理订阅。它只是把我已经能访问的本机网络，借给一台我有权限使用的内网服务器。</p>
     </article>
   </main>
 
