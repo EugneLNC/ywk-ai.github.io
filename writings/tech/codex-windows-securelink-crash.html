@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>一次 Codex Windows 闪退：SecureLink 进程注入冲突 - Wenkai Yang 的博客</title>
+  <meta name="description" content="记录 Codex Windows 桌面应用启动后立即闪退的排查过程：从 0xC0000005、Crashpad 转储和进程模块入手，定位 SecureLink 3.8.5 的 WsInj 注入冲突，并通过卸载重启完成 A/B 验证。">
+  <link rel="stylesheet" href="../../styles/site.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../../index.html">Wenkai Yang</a>
+    <nav class="site-nav" aria-label="主导航">
+      <a href="../../toc.html">目录</a>
+      <a href="../../about.html">关于</a>
+      <a href="https://github.com/ywk-ai" rel="me">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page article">
+    <p class="crumb"><a href="../../toc.html">目录</a> / 技术</p>
+    <article>
+      <h1>一次 Codex Windows 闪退：SecureLink 进程注入冲突</h1>
+      <p class="meta">2026 年 7 月 19 日 · Windows · Codex App · Crashpad · 进程注入</p>
+
+      <p>这次故障看起来很普通：Codex Windows 桌面应用刚打开就消失，没有报错框，也没有可读日志。重装应用、清空本地状态、禁用虚拟显卡都没用。真正的线索藏在应用自己的 Crashpad 转储和进程模块列表里。</p>
+
+      <p>最后确认的根因不是聊天记录、Skills 或显卡，而是 SecureLink 3.8.5。它的内核驱动把两个 DLL 注入了基于 Chromium 的 <code>ChatGPT.exe</code> 主进程，触发 <code>0xC0000005</code> 内存访问冲突。卸载 SecureLink 并重启后，注入模块消失，应用恢复稳定。</p>
+
+      <h2>故障环境</h2>
+
+      <ul>
+        <li>Windows 11 Home，系统内部版本 <code>26200</code>，x64。</li>
+        <li>Codex App / Microsoft Store 包版本 <code>26.715.4045.0</code>。</li>
+        <li>SecureLink <code>3.8.5</code>，发布者为网宿科技。</li>
+        <li>表现为启动后数秒内静默退出；每次都会生成约 44 MB 的 Crashpad <code>.dmp</code>。</li>
+      </ul>
+
+      <p>这里的进程名容易让人误会。Windows 包名是 <code>OpenAI.Codex</code>，桌面主进程却叫 <code>ChatGPT.exe</code>；随应用启动的 <code>codex.exe</code> 子进程随后以状态 <code>0</code> 正常退出。崩溃的是桌面宿主，不是 Codex CLI。</p>
+
+      <h2>先排除本地状态和显卡</h2>
+
+      <p>我先把原来的 <code>.codex</code> 完整备份，再让应用以全新状态启动。它仍然闪退。这一步基本排除了会话、Skills、Plugins、SQLite 状态库和用户配置。</p>
+
+      <p>随后禁用 Oray 虚拟显卡并重启，故障没有变化。之前为了测试设置过的 <code>WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu</code> 也没有改变结果。当前应用使用 Chromium 桌面宿主，这个 WebView2 变量本来就未必能作用到它。</p>
+
+      <h2>真正有用的证据</h2>
+
+      <p>Windows Error Reporting 的常规 LocalDumps 目录没有按预期出现文件，但应用自带的 Crashpad 一直在工作。转储显示主进程退出状态为：</p>
+
+      <pre><code>3221225477
+0xC0000005
+STATUS_ACCESS_VIOLATION</code></pre>
+
+      <p>接着检查崩溃前的进程模块，发现两个既不属于 Windows、也不属于 OpenAI 的 DLL：</p>
+
+      <pre><code>C:\Windows\System32\drivers\WsInjtdll64.dll
+C:\Windows\System32\drivers\WsInjProctDll64.dll</code></pre>
+
+      <p>两者数字签名都有效，签名者是网宿科技。系统里同时存在自动启动的 SecureLink 服务，以及以 <code>System</code> 模式启动的 <code>WsInjCoreDrv</code> 驱动。文件名、驱动状态和加载位置能够互相印证：SecureLink 正在向 Codex 桌面主进程注入自己的兼容或防护模块。</p>
+
+      <p>有效签名只说明文件来自签名者且未被篡改，不代表它和当前 Chromium 版本兼容。</p>
+
+      <h2>用 A/B 测试确认根因</h2>
+
+      <p>定位到可疑模块后，我没有手动删除 DLL 或驱动文件，而是使用 SecureLink 自带的卸载程序移除软件，然后重启 Windows。重启是必要的：<code>WsInjCoreDrv</code> 属于内核驱动，只退出托盘程序或停止服务不足以清除已经加载的组件。</p>
+
+      <p>重启后的检查结果是：</p>
+
+      <ul>
+        <li><code>SecureLink</code> 服务不存在；</li>
+        <li><code>WsInjCoreDrv</code> 驱动不存在；</li>
+        <li><code>WsInj*</code> DLL 文件和进程模块均未出现；</li>
+        <li>Codex App 能正常打开并持续运行；</li>
+        <li>重启后没有新的相关应用崩溃事件，也没有新的 Crashpad 转储。</li>
+      </ul>
+
+      <p>卸载前稳定复现，卸载并重启后立即恢复，其他变量没有同时改变。到这里可以认定：SecureLink 3.8.5 的进程注入组件与 Codex App 26.715.4045.0 冲突，是这次闪退的根因。</p>
+
+      <h2>安全处理方式</h2>
+
+      <p>个人电脑可以从 Windows“已安装的应用”或 SecureLink 自带卸载器移除软件，然后重启。如果 SecureLink 是学校或单位强制安装的软件，不要自行停用驱动，也不要删除 <code>WsInj*.dll</code> 或 <code>WsInjCoreDrv.sys</code>。更合适的做法是让管理员为以下对象配置进程注入白名单：</p>
+
+      <pre><code>ChatGPT.exe
+codex.exe
+OpenAI.Codex_2p2nqsd0c76g0</code></pre>
+
+      <p>提交给管理员的信息应包括应用版本、SecureLink 版本、退出码 <code>0xC0000005</code>、两个注入 DLL 的完整名称和驱动名 <code>WsInjCoreDrv</code>。</p>
+
+      <h2>修复后的只读检查</h2>
+
+      <p>下面这些命令不会删除文件或修改服务，可以用来确认注入残留和新的崩溃记录：</p>
+
+      <pre><code>Get-Service SecureLink -ErrorAction SilentlyContinue
+
+Get-CimInstance Win32_SystemDriver |
+  Where-Object {
+    $_.Name -match 'WsInj|SecureLink' -or
+    $_.PathName -match 'WsInj|SecureLink'
+  } |
+  Select-Object Name, State, StartMode, PathName
+
+Get-Process -Name ChatGPT -ErrorAction SilentlyContinue |
+  ForEach-Object {
+    try { $_.Modules } catch {}
+  } |
+  Where-Object {
+    $_.ModuleName -match 'WsInj|SecureLink' -or
+    $_.FileName -match 'WsInj|SecureLink'
+  } |
+  Select-Object ModuleName, FileName</code></pre>
+
+      <p>检查重启后的崩溃事件时，先把结果保存到变量，再格式化输出。这样可以避开 Windows PowerShell 中 <code>foreach (...) { ... } | Format-Table</code> 引发的“空管道元素”语法错误。</p>
+
+      <pre><code>$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+
+$events = Get-WinEvent -FilterHashtable @{
+  LogName  = 'Application'
+  StartTime = $boot
+} -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.ProviderName -in @('Application Error', 'Windows Error Reporting') -and
+    $_.Message -match 'ChatGPT.exe|OpenAI.Codex'
+  }
+
+$events | Select-Object TimeCreated, ProviderName, Id, Message |
+  Format-List</code></pre>
+
+      <h2>还有两个观察项</h2>
+
+      <p>修复后的进程模块审计还看到 Nahimic/A-Volute 音效组件和 NVIDIA 覆盖层进入了 ChatGPT 进程。它们的数字签名有效，目前没有伴随新的崩溃，不能据此认定有问题。只是这次经历说明，任何会向 Chromium 进程加载 DLL 的音效、叠加层、安全客户端或录屏工具，都值得在下一次同类故障中优先检查。</p>
+
+      <p>现阶段不需要为了“彻底干净”去卸载这些组件。保留当前稳定配置，并在故障复现时重新比对进程模块和转储，信息量更大。</p>
+
+      <h2>准备提交给 OpenAI 的内容</h2>
+
+      <p>公开报告只保留可复现的技术信息：应用与系统版本、退出码、注入模块、驱动名和 A/B 结果。用户名、认证文件、会话数据库、备份目录及原始转储都不应直接上传。原始 <code>.dmp</code> 可能包含内存中的私人数据，如果维护者需要，应通过他们指定的私密渠道提供。</p>
+
+      <p>OpenAI 的公开 Codex issue 区里已经有同样表现为 <code>0xC0000005</code> 的 Windows 启动崩溃报告，例如 <a href="https://github.com/openai/codex/issues/25376">#25376</a>，但该报告没有发现第三方注入模块。本次案例的价值在于根因已经通过卸载前后的对照确认，可以帮助维护者增加兼容性提示或诊断信息。</p>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <span>© 2026 Wenkai Yang</span>
+    <a href="../../toc.html">文档索引</a>
+  </footer>
+</body>
+</html>
