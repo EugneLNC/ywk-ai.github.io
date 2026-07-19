@@ -132,11 +132,13 @@ $events | Select-Object TimeCreated, ProviderName, Id, Message |
 
       <p>现阶段不需要为了“彻底干净”去卸载这些组件。保留当前稳定配置，并在故障复现时重新比对进程模块和转储，信息量更大。</p>
 
-      <h2>准备提交给 OpenAI 的内容</h2>
+      <h2>提交给 OpenAI 的内容</h2>
 
       <p>公开报告只保留可复现的技术信息：应用与系统版本、退出码、注入模块、驱动名和 A/B 结果。用户名、认证文件、会话数据库、备份目录及原始转储都不应直接上传。原始 <code>.dmp</code> 可能包含内存中的私人数据，如果维护者需要，应通过他们指定的私密渠道提供。</p>
 
       <p>OpenAI 的公开 Codex issue 区里已经有同样表现为 <code>0xC0000005</code> 的 Windows 启动崩溃报告，例如 <a href="https://github.com/openai/codex/issues/25376">#25376</a>，但该报告没有发现第三方注入模块。本次案例的价值在于根因已经通过卸载前后的对照确认，可以帮助维护者增加兼容性提示或诊断信息。</p>
+
+      <p>脱敏后的英文报告已经提交为 <a href="https://github.com/openai/codex/issues/34107">openai/codex #34107</a>。报告没有附带原始转储，但说明了可以通过维护者认可的私密渠道提供进一步材料。</p>
     </article>
   </main>
 

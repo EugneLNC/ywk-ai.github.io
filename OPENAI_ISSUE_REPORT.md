@@ -1,4 +1,6 @@
-# Windows: SecureLink process injection crashes Codex App host with 0xC0000005
+# OpenAI Codex issue report: SecureLink injection crash
+
+Submitted to `openai/codex` as [issue #34107](https://github.com/openai/codex/issues/34107) on 2026-07-19. The text below is the submitted issue body.
 
 ### What version of the Codex App are you using (From “About Codex” dialog)?
 
@@ -61,6 +63,7 @@ Codex App should remain open. If an unsupported third-party process-injection mo
 
 ### Additional information
 
+- Sanitized public case study with the full diagnostic sequence: https://eugnelnc.github.io/ywk-ai.github.io/writings/tech/codex-windows-securelink-crash.html
 - This appears related by symptom to #25376 and #19258, but those reports do not identify SecureLink/Wangsu injection modules. This report has a confirmed before/after root cause.
 - The valid Wangsu signatures show that the modules were authentic; they do not guarantee compatibility with the Chromium build embedded in Codex App.
 - No raw minidump is attached publicly because process dumps may contain private in-memory data. A sanitized module list or dump can be provided through a private maintainer-approved channel if needed.
